@@ -26,10 +26,13 @@ export default function Chat({ currentUser }) {
   const [showSidebar, setShowSidebar] = useState(true);
   const [showSearch, setShowSearch] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const inputRef = useRef(null);
-
+  const typingTimeoutRef = useRef(null);
 
   const isPriyanka = currentUser.id === PRIYANKA_ID;
   const isMobile = windowWidth <= 768;
@@ -74,11 +77,43 @@ export default function Chat({ currentUser }) {
     u.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // Check if user is at bottom of messages
+  const handleScroll = () => {
+    if (messagesContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+      const bottomThreshold = 100; // pixels from bottom
+      const isUserAtBottom = scrollHeight - scrollTop - clientHeight < bottomThreshold;
+      
+      setIsAtBottom(isUserAtBottom);
+      setShowScrollButton(!isUserAtBottom && messages.length > 0);
+    }
   };
 
-  useEffect(scrollToBottom, [messages]);
+  // Scroll to bottom function
+  const scrollToBottom = (behavior = "smooth") => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: behavior
+      });
+    }
+  };
+
+  // Auto-scroll only if user was at bottom
+  useEffect(() => {
+    if (messages.length > 0 && isAtBottom) {
+      scrollToBottom("smooth");
+    }
+  }, [messages, isAtBottom]);
+
+  // Add scroll listener
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.addEventListener('scroll', handleScroll);
+      return () => container.removeEventListener('scroll', handleScroll);
+    }
+  }, []);
 
   // Show browser notification
   const showNotification = useCallback((sender, messageText) => {
@@ -97,7 +132,7 @@ export default function Chat({ currentUser }) {
         badge: '/favicon.ico',
         tag: 'family-chat',
         renotify: true,
-        vibrate: [200, 100, 200] // Vibration pattern for mobile
+        vibrate: [200, 100, 200]
       });
 
       notification.onclick = () => {
@@ -182,19 +217,29 @@ export default function Chat({ currentUser }) {
     return () => unsubscribe();
   }, [currentUser.id, selectedUser]);
 
+  // Improved send message with better UX
   const sendMessage = async () => {
     if (!text.trim() || !selectedUser) return;
 
-    await addDoc(collection(db, "messages"), {
-      text: text.trim(),
-      sender: currentUser.id,
-      receiver: selectedUser.id,
-      timestamp: new Date(),
-      read: false
-    });
-
-    setText("");
-    inputRef.current?.focus();
+    const messageText = text.trim();
+    setText(""); // Clear immediately for better UX
+    
+    try {
+      await addDoc(collection(db, "messages"), {
+        text: messageText,
+        sender: currentUser.id,
+        receiver: selectedUser.id,
+        timestamp: new Date(),
+        read: false
+      });
+      
+      // Smooth scroll to bottom after sending
+      setTimeout(() => scrollToBottom("smooth"), 100);
+    } catch (error) {
+      console.error("Error sending message:", error);
+      // Optionally show error to user
+      setText(messageText); // Restore text if failed
+    }
   };
 
   // Mark messages as read
@@ -252,14 +297,32 @@ export default function Chat({ currentUser }) {
     return groups;
   }, {});
 
-  // Simulate typing indicator
-  useEffect(() => {
-    if (text) {
-      setIsTyping(true);
-      const timeout = setTimeout(() => setIsTyping(false), 1000);
-      return () => clearTimeout(timeout);
+  // Improved typing indicator with debounce
+  const handleTextChange = (e) => {
+    setText(e.target.value);
+    
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
     }
-  }, [text]);
+    
+    // Set typing to true
+    setIsTyping(true);
+    
+    // Set timeout to set typing to false after 1 second of no typing
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+    }, 1000);
+  };
+
+  // Cleanup typing timeout
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('familyChat_user');
@@ -272,12 +335,22 @@ export default function Chat({ currentUser }) {
     if (isMobile) {
       setShowSidebar(false);
     }
+    // Reset scroll position when changing users
+    setTimeout(() => scrollToBottom("auto"), 100);
   };
 
   const handleBackToUsers = () => {
     setSelectedUser(null);
     if (isMobile) {
       setShowSidebar(true);
+    }
+  };
+
+  // Handle enter key with better UX
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
     }
   };
 
@@ -354,8 +427,11 @@ export default function Chat({ currentUser }) {
                 fontSize: isMobile ? "11px" : "12px",
                 display: "flex",
                 alignItems: "center",
-                gap: "3px"
+                gap: "3px",
+                transition: "background 0.2s"
               }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.3)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.2)"}
             >
               🚪 {!isMobile && "Logout"}
             </button>
@@ -377,8 +453,12 @@ export default function Chat({ currentUser }) {
                   fontSize: "14px",
                   display: "flex",
                   alignItems: "center",
-                  gap: "5px"
+                  gap: "5px",
+                  cursor: "pointer",
+                  transition: "background 0.2s"
                 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.2)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
               >
                 🔍 {showSearch ? "Close search" : "Search members..."}
               </button>
@@ -400,8 +480,12 @@ export default function Chat({ currentUser }) {
                 border: "none",
                 borderRadius: "20px",
                 outline: "none",
-                background: "#fff"
+                background: "#fff",
+                fontSize: "14px",
+                transition: "box-shadow 0.2s"
               }}
+              onFocus={(e) => e.target.style.boxShadow = "0 0 0 2px rgba(7,94,84,0.2)"}
+              onBlur={(e) => e.target.style.boxShadow = "none"}
             />
           </div>
         )}
@@ -421,7 +505,8 @@ export default function Chat({ currentUser }) {
                 border: "none",
                 borderRadius: "20px",
                 outline: "none",
-                background: "#fff"
+                background: "#fff",
+                fontSize: "14px"
               }}
             />
           </div>
@@ -448,8 +533,11 @@ export default function Chat({ currentUser }) {
                 padding: "2px 8px",
                 borderRadius: "3px",
                 cursor: "pointer",
-                fontSize: "11px"
+                fontSize: "11px",
+                transition: "background 0.2s"
               }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "#6d5300"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "#856404"}
             >
               Enable
             </button>
@@ -511,7 +599,8 @@ export default function Chat({ currentUser }) {
                         alignItems: "center",
                         justifyContent: "center",
                         fontSize: "11px",
-                        flexShrink: 0
+                        flexShrink: 0,
+                        animation: "pulse 1s infinite"
                       }}>
                         {unreadCount[u.id]}
                       </span>
@@ -562,7 +651,8 @@ export default function Chat({ currentUser }) {
               borderBottom: "1px solid #e0e0e0",
               display: "flex",
               alignItems: "center",
-              gap: isMobile ? "10px" : "15px"
+              gap: isMobile ? "10px" : "15px",
+              flexShrink: 0
             }}>
               {isMobile && (
                 <button
@@ -573,8 +663,11 @@ export default function Chat({ currentUser }) {
                     fontSize: "24px",
                     cursor: "pointer",
                     padding: "5px",
-                    color: "#075e54"
+                    color: "#075e54",
+                    transition: "transform 0.2s"
                   }}
+                  onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.1)"}
+                  onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
                 >
                   ←
                 </button>
@@ -596,14 +689,18 @@ export default function Chat({ currentUser }) {
               </div>
             </div>
 
-            {/* Messages Area */}
-            <div style={{ 
-              flex: 1, 
-              overflowY: "auto", 
-              padding: isMobile ? "10px" : "20px",
-              background: "#efeae2",
-              WebkitOverflowScrolling: "touch"
-            }}>
+            {/* Messages Area with Scroll Container */}
+            <div 
+              ref={messagesContainerRef}
+              style={{ 
+                flex: 1, 
+                overflowY: "auto", 
+                padding: isMobile ? "10px" : "20px",
+                background: "#efeae2",
+                WebkitOverflowScrolling: "touch",
+                position: "relative"
+              }}
+            >
               {Object.entries(groupedMessages).map(([date, dateMessages]) => (
                 <div key={date}>
                   <div style={{ 
@@ -615,7 +712,8 @@ export default function Chat({ currentUser }) {
                     <span style={{ 
                       background: "#e4e6eb",
                       padding: isMobile ? "4px 10px" : "5px 12px",
-                      borderRadius: "15px"
+                      borderRadius: "15px",
+                      display: "inline-block"
                     }}>
                       {date}
                     </span>
@@ -631,7 +729,8 @@ export default function Chat({ currentUser }) {
                         style={{
                           display: "flex",
                           justifyContent: isMine ? "flex-end" : "flex-start",
-                          marginBottom: index === dateMessages.length - 1 ? "5px" : "3px"
+                          marginBottom: index === dateMessages.length - 1 ? "5px" : "3px",
+                          animation: "fadeIn 0.3s ease-in"
                         }}
                       >
                         <div
@@ -646,8 +745,12 @@ export default function Chat({ currentUser }) {
                               borderBottomRightRadius: "4px"
                             } : {
                               borderBottomLeftRadius: "4px"
-                            })
+                            }),
+                            transition: "transform 0.2s",
+                            transform: "scale(1)"
                           }}
+                          onMouseEnter={(e) => !isMobile && (e.currentTarget.style.transform = "scale(1.02)")}
+                          onMouseLeave={(e) => !isMobile && (e.currentTarget.style.transform = "scale(1)")}
                         >
                           {!isMine && (
                             <strong style={{ 
@@ -684,57 +787,104 @@ export default function Chat({ currentUser }) {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Input Area */}
+            {/* Scroll to Bottom Button */}
+            {showScrollButton && (
+              <button
+                onClick={() => scrollToBottom("smooth")}
+                style={{
+                  position: "absolute",
+                  bottom: "80px",
+                  right: "20px",
+                  width: "40px",
+                  height: "40px",
+                  borderRadius: "50%",
+                  background: "#075e54",
+                  color: "white",
+                  border: "none",
+                  boxShadow: "0 2px 10px rgba(0,0,0,0.2)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "20px",
+                  zIndex: 10,
+                  transition: "all 0.2s",
+                  animation: "fadeIn 0.3s"
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "#128C7E"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "#075e54"}
+              >
+                ↓
+              </button>
+            )}
+
+            {/* Input Area with improved UX */}
             <div style={{ 
               padding: isMobile ? "10px" : "15px 20px", 
               background: "#f0f2f5",
               display: "flex",
               gap: isMobile ? "8px" : "10px",
-              alignItems: "center"
+              alignItems: "center",
+              borderTop: "1px solid #e0e0e0",
+              flexShrink: 0
             }}>
               <input
                 ref={inputRef}
                 style={{ 
                   flex: 1, 
-                  padding: isMobile ? "10px 12px" : "12px 15px",
+                  padding: isMobile ? "12px 15px" : "12px 15px",
                   border: "none",
                   borderRadius: "25px",
                   outline: "none",
-                  fontSize: isMobile ? "14px" : "15px",
-                  background: "#fff"
+                  fontSize: isMobile ? "15px" : "15px",
+                  background: "#fff",
+                  transition: "box-shadow 0.2s, transform 0.1s",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
                 }}
                 type="text"
                 value={text}
                 placeholder={`Message ${selectedUser.name}...`}
-                onChange={e => setText(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && sendMessage()}
+                onChange={handleTextChange}
+                onKeyDown={handleKeyDown}
+                onFocus={(e) => {
+                  e.target.style.boxShadow = "0 0 0 3px rgba(7,94,84,0.2)";
+                  // Scroll to bottom when focusing on mobile
+                  if (isMobile) {
+                    setTimeout(() => scrollToBottom("smooth"), 300);
+                  }
+                }}
+                onBlur={(e) => e.target.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)"}
               />
               <button 
                 onClick={sendMessage} 
                 disabled={!text.trim()}
                 style={{
-                  width: isMobile ? "40px" : "45px",
-                  height: isMobile ? "40px" : "45px",
+                  width: isMobile ? "45px" : "45px",
+                  height: isMobile ? "45px" : "45px",
                   borderRadius: "50%",
                   border: "none",
                   background: text.trim() ? "#075e54" : "#b3b3b3",
                   color: "#fff",
-                  fontSize: isMobile ? "18px" : "20px",
+                  fontSize: isMobile ? "20px" : "20px",
                   cursor: text.trim() ? "pointer" : "default",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  transition: "background 0.2s",
-                  flexShrink: 0
+                  transition: "all 0.2s",
+                  flexShrink: 0,
+                  transform: text.trim() ? "scale(1)" : "scale(0.95)",
+                  boxShadow: text.trim() ? "0 2px 5px rgba(7,94,84,0.3)" : "none"
                 }}
                 onMouseEnter={(e) => {
                   if (!isMobile && text.trim()) {
                     e.currentTarget.style.background = "#128C7E";
+                    e.currentTarget.style.transform = "scale(1.05)";
                   }
                 }}
                 onMouseLeave={(e) => {
                   if (!isMobile && text.trim()) {
                     e.currentTarget.style.background = "#075e54";
+                    e.currentTarget.style.transform = "scale(1)";
                   }
                 }}
               >
@@ -782,8 +932,11 @@ export default function Chat({ currentUser }) {
                   border: "none",
                   borderRadius: "25px",
                   fontSize: "16px",
-                  cursor: "pointer"
+                  cursor: "pointer",
+                  transition: "all 0.2s"
                 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "#128C7E"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "#075e54"}
               >
                 Select a member
               </button>
@@ -791,6 +944,32 @@ export default function Chat({ currentUser }) {
           </div>
         )}
       </div>
+
+      {/* Add keyframe animations */}
+      <style jsx>{`
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        
+        @keyframes pulse {
+          0% {
+            transform: scale(1);
+          }
+          50% {
+            transform: scale(1.1);
+          }
+          100% {
+            transform: scale(1);
+          }
+        }
+      `}</style>
     </div>
   );
 }
