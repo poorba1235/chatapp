@@ -29,7 +29,7 @@ export default function Chat({ currentUser }) {
   
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
-  const notificationRef = useRef(null);
+
 
   const isPriyanka = currentUser.id === PRIYANKA_ID;
   const isMobile = windowWidth <= 768;
